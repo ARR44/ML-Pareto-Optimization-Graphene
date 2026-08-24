@@ -1,0 +1,95 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from joblib import load
+
+# ---------------------------------------------------------
+# 1. Load All Trained Models
+# ---------------------------------------------------------
+# Ensure you have saved models for all target properties
+models = {
+    'Youngs_Modulus': load("best_model_KNeighborsRegressor.joblib"),
+    'Fracture_Toughness': load("best_model1_VotingRegressor.joblib"),
+    # Replace filenames below with your actual saved model files:
+    'Ultimate_Stress': load("best_model_VotingRegressor.joblib"),
+    'Ultimate_Strain': load("best_model_RandomForestRegressor.joblib")
+}
+
+# ---------------------------------------------------------
+# 2. Generate Synthetic Parameter Space (Grid)
+# ---------------------------------------------------------
+graphene_range = np.linspace(0, 100, 101)          # 0% to 100%
+defect_density_range = np.linspace(0, 5, 51)       # 0 to 5%
+defect_types = ['SV', 'DV', 'SW', 'SH', 'CH']
+
+grid_list = [
+    {'Graphene': g, 'Defect Density': d, 'Defect Type': dt}
+    for g in graphene_range
+    for d in defect_density_range
+    for dt in defect_types
+]
+
+X_grid = pd.DataFrame(grid_list)
+print(f"Evaluated Grid Size: {len(X_grid):,} configurations")
+
+# ---------------------------------------------------------
+# 3. High-Throughput Predictions for ALL Targets
+# ---------------------------------------------------------
+for prop_name, model in models.items():
+    X_grid[prop_name] = model.predict(X_grid)
+
+# ---------------------------------------------------------
+# 4. Function for Pareto Identification
+# ---------------------------------------------------------
+def identify_pareto(df, col1, col2):
+    scores = df[[col1, col2]].values
+    pareto_mask = np.ones(scores.shape[0], dtype=bool)
+    for i, score in enumerate(scores):
+        if pareto_mask[i]:
+            pareto_mask[pareto_mask] = np.any(scores[pareto_mask] > score, axis=1)
+            pareto_mask[i] = True
+    return pareto_mask
+
+# ---------------------------------------------------------
+# 5. Define Pairs to Plot and Optimize
+# ---------------------------------------------------------
+property_pairs = [
+    ('Youngs_Modulus', 'Fracture_Toughness', "Young's Modulus (GPa)", "Fracture Toughness (MJ/m³)"),
+    ('Youngs_Modulus', 'Ultimate_Stress', "Young's Modulus (GPa)", "Ultimate Stress (GPa)"),
+    ('Ultimate_Stress', 'Ultimate_Strain', "Ultimate Stress (GPa)", "Ultimate Strain"),
+    ('Fracture_Toughness', 'Ultimate_Strain', "Fracture Toughness (MJ/m³)", "Ultimate Strain")
+]
+
+# ---------------------------------------------------------
+# 6. Plotting Grid of Pareto Fronts (2x2 Subplots)
+# ---------------------------------------------------------
+fig, axes = plt.subplots(2, 2, figsize=(10, 8), dpi=300)
+axes = axes.flatten()
+
+for idx, (x_col, y_col, x_label, y_label) in enumerate(property_pairs):
+    ax = axes[idx]
+    
+    # Identify Pareto Front
+    pareto_mask = identify_pareto(X_grid, x_col, y_col)
+    pareto_df = X_grid[pareto_mask].sort_values(by=x_col)
+    
+    # Save optimal structures for this specific trade-off to CSV
+    pareto_df.to_csv(f"optimal_pareto_{x_col}_vs_{y_col}.csv", index=False)
+    
+    # Plot background points (Smaller & transparent)
+    ax.scatter(X_grid[x_col], X_grid[y_col], c='gainsboro', alpha=0.15, s=2, label='ML Parameter Space')
+    
+    # Plot Pareto Front
+    ax.scatter(pareto_df[x_col], pareto_df[y_col], c='crimson', s=20, zorder=3, label='Pareto Front')
+    ax.plot(pareto_df[x_col], pareto_df[y_col], c='crimson', linestyle='--', linewidth=1.2, zorder=2)
+    
+    # Formatting
+    ax.set_xlabel(x_label, fontsize=9, fontweight='bold')
+    ax.set_ylabel(y_label, fontsize=9, fontweight='bold')
+    ax.set_title(f"{x_label.split(' (')[0]} vs {y_label.split(' (')[0]}", fontsize=10, fontweight='bold')
+    ax.grid(True, linestyle=':', alpha=0.5)
+    ax.legend(loc='lower left', fontsize=7, frameon=True)
+
+plt.tight_layout()
+plt.savefig("All_Properties_Pareto_Fronts.png", dpi=300)
+plt.show()
